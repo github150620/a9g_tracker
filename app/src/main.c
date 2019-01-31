@@ -60,6 +60,9 @@ HANDLE networkCellInfoEventHandle = NULL;
 bool isNetworkRegistered = false;
 bool isNetworkRegisterDenied = false;
 
+int startAttachCount = 0;
+int startActiveCount = 0;
+
 uint8_t rbuf[RECEIVE_BUFFER_MAX_LENGTH];
 uint8_t wbuf[SEND_BUFFER_MAX_LENGTH];
 
@@ -270,15 +273,19 @@ void NetworkTask(VOID *pData) {
         }
 
         if (attachStatus==0) {
+            if (startAttachCount > 10) {
+                log_print("startAttachCount>10, PM_Restart()");
+                PM_Restart();
+            }
             Network_StartAttach();
             log_print("Network_StartAttach()");
-            OS_Sleep(3000);
+            OS_Sleep(5000);
             continue;
         } else if (attachStatus==1) {
             log_print("attachStatus==1");
         } else {
             log_print("unkown attach status");
-            OS_Sleep(3000);            
+            OS_Sleep(3000);
             continue;
         }
 
@@ -289,18 +296,24 @@ void NetworkTask(VOID *pData) {
         }
 
         if (activateStatus==0) {
+            if ( startActiveCount > 10) {
+                log_print("startActiveCount>10, PM_Restart()");
+                PM_Restart();
+            }
             Network_PDP_Context_t context = {
                 .apn        ="cmiot",
                 .userName   = ""    ,
                 .userPasswd = ""
             };
             Network_StartActive(context);
+            startActiveCount++;
             log_print("Network_StartActive()");
             OS_Sleep(3000);
             continue;
         } else if (activateStatus==1) {
             log_print("activateStatus==1");
-            OS_Sleep(20000);
+            startActiveCount = 0;
+            OS_Sleep(30000);
         } else {
             log_print("unkown active status");
             OS_Sleep(3000);
@@ -312,6 +325,7 @@ void NetworkTask(VOID *pData) {
 void EventDispatch(API_Event_t* pEvent)
 {
     uint8_t status;
+    char buf[64];
 
     switch(pEvent->id)
     {
@@ -366,7 +380,6 @@ void EventDispatch(API_Event_t* pEvent)
         case API_EVENT_ID_NETWORK_DEACTIVED:
             Trace(1, "API_EVENT_ID_NETWORK_DEACTIVED");
             log_print("API_EVENT_ID_NETWORK_DEACTIVED");
-            Network_StartDetach();
             break;            
         case API_EVENT_ID_NETWORK_ACTIVATE_FAILED:
             Trace(1, "API_EVENT_ID_NETWORK_ACTIVATE_FAILED");
@@ -378,7 +391,6 @@ void EventDispatch(API_Event_t* pEvent)
             break;
         case API_EVENT_ID_NETWORK_GOT_TIME: {
             RTC_Time_t* t = (RTC_Time_t*)pEvent->pParam1;
-            char buf[64];
             sprintf(buf, "NETWORK_GOT_TIME %04d-%02d-%02d %02d:%02d:%02d+%d,%d", t->year, t->month, t->day, t->hour, t->minute, t->second, t->timeZone, t->timeZoneMinutes);
             log_print(buf);
             break;
@@ -395,7 +407,6 @@ void EventDispatch(API_Event_t* pEvent)
             break;
     }
 }
-
 
 void AppMainTask(VOID *pData)
 {
@@ -417,6 +428,7 @@ void AppMainTask(VOID *pData)
         }
     }
 }
+
 void app_Main(void)
 {
     mainTaskHandle = OS_CreateTask(AppMainTask ,
