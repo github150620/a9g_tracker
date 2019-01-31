@@ -283,6 +283,7 @@ void NetworkTask(VOID *pData) {
             continue;
         } else if (attachStatus==1) {
             log_print("attachStatus==1");
+            startAttachCount = 0;
         } else {
             log_print("unkown attach status");
             OS_Sleep(3000);
@@ -330,7 +331,7 @@ void EventDispatch(API_Event_t* pEvent)
     switch(pEvent->id)
     {
         case API_EVENT_ID_SYSTEM_READY:
-            Trace(1, "API_EVENT_ID_SYSTEM_READY");        
+            Trace(1, "API_EVENT_ID_SYSTEM_READY");
             log_print("API_EVENT_ID_SYSTEM_READY");
             break;
         case API_EVENT_ID_KEY_DOWN:
