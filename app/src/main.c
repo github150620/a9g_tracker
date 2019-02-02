@@ -184,11 +184,12 @@ void LoopTask(VOID *pData) {
     int t;
     int pmLatest = 0;
     int gsmLatest = 0;
+    int fullGsmLastest = 0;
 
     while(1)
     {
         t = time(NULL) + 3600*8;
-        if ( 1 || t-pmLatest >= 60 ) {
+        if (t-pmLatest >= 60 ) {
             log_print("send PM data");
             Trace(1, "send PM data");
             t = time(NULL) + 3600*8;
@@ -210,7 +211,7 @@ void LoopTask(VOID *pData) {
         }
 
         t = time(NULL) + 3600*8;
-        if ( 1 || t-gsmLatest >= 60) {
+        if (t-gsmLatest >= 60) {
             log_print("send GSM data");
             Trace(1, "send GSM data");
             if (Network_GetCellInfoRequst()) {
@@ -220,19 +221,35 @@ void LoopTask(VOID *pData) {
                     uint8_t l;
                     GSM_GetLocation(&p, &l);
                     if (sock_status() == 1) {
-                        for (int i=0;i<l;i++) {
-                            SendGSM(t, &p[i]);
-                            break;
-                        }
-                        gsmLatest = t;
-                    } else {
-                        if (sock_connect()) {
-                            SendSIM();
+                        if (t-fullGsmLastest>=600) {
+                            for (int i=0;i<l;i++) {
+                                SendGSM(t, &p[i]);
+                            }
+                            gsmLatest = t;
+                            fullGsmLastest = t;
+                        } else {
                             for (int i=0;i<l;i++) {
                                 SendGSM(t, &p[i]);
                                 break;
-                            }                            
+                            }
                             gsmLatest = t;
+                        }
+                    } else {
+                        if (sock_connect()) {
+                            SendSIM();
+                            if (t-fullGsmLastest>=600) {
+                                for (int i=0;i<l;i++) {
+                                    SendGSM(t, &p[i]);
+                                }
+                                gsmLatest = t;
+                                fullGsmLastest = t;
+                            } else {
+                                for (int i=0;i<l;i++) {
+                                    SendGSM(t, &p[i]);
+                                    break;
+                                }
+                                gsmLatest = t;
+                            }
                         }
                     }
                 } else {
@@ -256,8 +273,7 @@ void NetworkTask(VOID *pData) {
     uint8_t activateStatus = 0;
     while(1) {
         if (isNetworkRegisterDenied) {
-            LED_Blink_L2(LED_BLINK_FREQ_8HZ, 15);
-            //PM_Restart();
+            LED_Blink_L2(LED_BLINK_FREQ_8HZ, 10);
             continue;
         }
 
@@ -354,6 +370,7 @@ void EventDispatch(API_Event_t* pEvent)
             Trace(1, "API_EVENT_ID_NETWORK_REGISTERED_xxxx %d", pEvent->id);
             log_print("API_EVENT_ID_NETWORK_REGISTERED_xxxx");
             isNetworkRegistered = true;
+            isNetworkRegisterDenied = false;
             break;
         case API_EVENT_ID_NETWORK_REGISTER_SEARCHING:
             Trace(1, "API_EVENT_ID_NETWORK_REGISTER_SEARCHING");
