@@ -19,12 +19,15 @@
 #include "api_socket.h"
 #include "minmea.h"
 
+#include "gps.h"
+#include "gps_parse.h"
+
 #include "gsm.h"
 #include "log.h"
 #include "led.h"
 #include "sock.h"
 
-#define VERSION "0.3.22"
+#define VERSION "0.3.24"
 
 #define SERVER_HOST "tracker.fish2bird.com"
 #define SERVER_PORT 19999
@@ -33,18 +36,19 @@
 #define SEND_BUFFER_MAX_LENGTH    256
 
 #define AppMain_TASK_STACK_SIZE    (2048 * 2)
-#define AppMain_TASK_PRIORITY      1
+#define AppMain_TASK_PRIORITY      2
+
+#define POWER_TASK_STACK_SIZE      (1024 * 1)
+#define POWER_TASK_PRIORITY        4
 
 #define Network_TASK_STACK_SIZE    (1024 * 1)
-#define Network_TASK_PRIORITY      2
+#define Network_TASK_PRIORITY      6
 
 #define Loop_TASK_STACK_SIZE  (2048 * 2)
 #define Loop_TASK_PRIORITY    8
 
-#define Blink_TASK_STACK_SIZE    (1024 * 1)
-#define Blink_TASK_PRIORITY      10
-
 #define LOG_FILE_PATH "/t/1.log"
+#define GPS_NMEA_LOG_FILE_PATH "/t/gps_nmea.log"
 
 char imei[16];
 char iccid[21];
@@ -71,7 +75,9 @@ void SendSIM() {
     memset(wbuf, 0, sizeof(wbuf));
     snprintf(wbuf, sizeof(wbuf), "$SIM:%s,%s,%s,%s\n", imei, iccid, imsi,VERSION);
     log_print(wbuf);
+    LED_TurnOn(LED_LED1);
     sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
+    LED_TurnOff(LED_LED1);
     log_print(rbuf);
 }
 
@@ -80,7 +86,9 @@ void SendPM(time_t t, uint8_t percent, uint16_t voltage) {
     memset(wbuf, 0, sizeof(wbuf));
     snprintf(wbuf, sizeof(wbuf), "$PM:%d,%d,%d\n", t, voltage, percent);
     log_print(wbuf);
+    LED_TurnOn(LED_LED1);    
     sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
+    LED_TurnOff(LED_LED1);
     log_print(rbuf);
 }
 
@@ -100,7 +108,9 @@ void SendGSM(time_t t, Network_Location_t *nl) {
                                     nl->iRxLevSub,
                                     nl->nArfcn);
     log_print(wbuf);
+    LED_TurnOn(LED_LED1); 
     sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
+    LED_TurnOff(LED_LED1);
     log_print(rbuf);
 }
 
@@ -111,7 +121,7 @@ void SendGPS(time_t t, struct minmea_sentence_rmc *rmc) {
     float longitude = minmea_tocoord(&rmc->longitude);
     float speed = minmea_tofloat(&rmc->speed);
     float course = minmea_tofloat(&rmc->course);    
-    snprintf(wbuf, sizeof(wbuf), "$GSM:%d,%02d%02d%02d,%.5f,%.5f,%.1d,%.1d\n",
+    snprintf(wbuf, sizeof(wbuf), "$GPS:%d,%02d%02d%02d,%.7f,%.7f,%.1f,%.1f,%d\n",
                                     t,
                                     rmc->time.hours,
                                     rmc->time.minutes,
@@ -119,9 +129,12 @@ void SendGPS(time_t t, struct minmea_sentence_rmc *rmc) {
                                     latitude,
                                     longitude,
                                     speed,
-                                    course);
+                                    course,
+                                    rmc->valid);
     log_print(wbuf);
+    LED_TurnOn(LED_LED1);    
     sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
+    LED_TurnOff(LED_LED1);    
     log_print(rbuf);
 }
 
@@ -131,29 +144,21 @@ void NetworkCallback(Network_Status_t status) {
     log_print(buf);
 }
 
-void BlinkTask(VOID *pData) {
-    while(1) {
-        LED_TurnOn(LED_LED1);
-        OS_Sleep(100);
-        LED_TurnOff(LED_LED1);
-        OS_Sleep(4900);
-    }
-}
-
+GPS_Info_t* gpsInfo;
+GPS_Info_t gpsInfoBuf;
+HANDLE gps_lock = NULL;
 void LoopTask(VOID *pData) {
     //PM_SetSysMinFreq(PM_SYS_FREQ_13M);
     //PM_SetSysMinFreq(PM_SYS_FREQ_78M);
     
     LED_Init();
-    blinkTaskHandle = OS_CreateTask(BlinkTask, NULL, NULL, Blink_TASK_STACK_SIZE, Blink_TASK_PRIORITY, 0, 0, "blink Task");
+    LED_BlinkSet(LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
 
     log_init(LOG_FILE_PATH);
     GSM_Init();
     sock_init(SERVER_HOST, SERVER_PORT);
 
     TIME_SetIsAutoUpdateRtcTime(true);
-
-    //LED_TurnOn(LED_LED1);
 
     Network_SetStatusChangedCallback(NetworkCallback);
 
@@ -165,7 +170,16 @@ void LoopTask(VOID *pData) {
         OS_Sleep(1000);
     }
 
-    LED_Blink_L2(LED_BLINK_FREQ_4HZ, 3);
+    gpsInfo = Gps_GetInfo();
+    GPS_Init();
+    GPS_SaveLog(true, GPS_NMEA_LOG_FILE_PATH);
+    GPS_Open(NULL);
+    if(!GPS_SetOutputInterval(5000)) {
+        Trace(1,"set nmea output interval fail");
+    }
+    //if(!GPS_AGPS(29.50191, 106.56246, 0, true)) {
+    //    Trace(1,"agps fail");
+    //}    
 
     memset(imei,0,sizeof(imei));
     INFO_GetIMEI(imei);
@@ -184,6 +198,7 @@ void LoopTask(VOID *pData) {
     int t;
     int pmLatest = 0;
     int gsmLatest = 0;
+    int gpsLatest = 0;
     int fullGsmLastest = 0;
 
     while(1)
@@ -195,17 +210,31 @@ void LoopTask(VOID *pData) {
             t = time(NULL) + 3600*8;
             uint8_t p;
             uint16_t v = PM_Voltage(&p);
-            if ( v < 3600 ) {
-                PM_ShutDown();
-            }
             if (sock_status() == 1) {
                 SendPM(t, p, v);
                 pmLatest = t;
             } else {
                 if (sock_connect()) {
+                    LED_BlinkSet(LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
                     SendSIM();
                     SendPM(t, p, v);
                     pmLatest = t;
+                }
+            }
+        }
+
+        t = time(NULL) + 3600*8;
+        if (t-gpsLatest >= 30) {
+            log_print("send gps data");
+            if (sock_status() == 1) {
+                SendGPS(t, &gpsInfoBuf.rmc);
+                gpsLatest = t;
+            } else {
+                if (sock_connect()) {
+                    LED_BlinkSet(LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
+                    SendSIM();
+                    SendGPS(t, &gpsInfoBuf.rmc);
+                    gpsLatest = t;
                 }
             }
         }
@@ -230,12 +259,12 @@ void LoopTask(VOID *pData) {
                         } else {
                             for (int i=0;i<l;i++) {
                                 SendGSM(t, &p[i]);
-                                break;
                             }
                             gsmLatest = t;
                         }
                     } else {
                         if (sock_connect()) {
+                            LED_BlinkSet(LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);                                                        
                             SendSIM();
                             if (t-fullGsmLastest>=600) {
                                 for (int i=0;i<l;i++) {
@@ -262,18 +291,18 @@ void LoopTask(VOID *pData) {
 
         //PM_SleepMode(true);
         PM_SetSysMinFreq(PM_SYS_FREQ_13M);
-        OS_Sleep(60000);
+        OS_Sleep(30000);
         PM_SetSysMinFreq(PM_SYS_FREQ_312M);
         //PM_SleepMode(false);
     }
 }
 
-void NetworkTask(VOID *pData) {
+void NetworkManageTask(VOID *pData) {
     uint8_t attachStatus = 0;
     uint8_t activateStatus = 0;
     while(1) {
         if (isNetworkRegisterDenied) {
-            LED_Blink_L2(LED_BLINK_FREQ_8HZ, 10);
+            OS_Sleep(10000);
             continue;
         }
 
@@ -325,7 +354,7 @@ void NetworkTask(VOID *pData) {
             Network_StartActive(context);
             startActiveCount++;
             log_print("Network_StartActive()");
-            OS_Sleep(3000);
+            OS_Sleep(10000);
             continue;
         } else if (activateStatus==1) {
             log_print("activateStatus==1");
@@ -336,6 +365,18 @@ void NetworkTask(VOID *pData) {
             OS_Sleep(3000);
             continue;            
         }
+    }
+}
+
+void PowerManageTask(VOID *pData) {
+    uint8_t p;
+    uint16_t v;
+    while (1) {
+        v = PM_Voltage(&p);
+        if ( v < 3600 ) {
+            PM_ShutDown();
+        }
+        OS_Sleep(60000);
     }
 }
 
@@ -371,6 +412,7 @@ void EventDispatch(API_Event_t* pEvent)
             log_print("API_EVENT_ID_NETWORK_REGISTERED_xxxx");
             isNetworkRegistered = true;
             isNetworkRegisterDenied = false;
+            LED_BlinkSet(LED_BLINK_FREQ_2HZ, LED_BLINK_DUTY_HALF);
             break;
         case API_EVENT_ID_NETWORK_REGISTER_SEARCHING:
             Trace(1, "API_EVENT_ID_NETWORK_REGISTER_SEARCHING");
@@ -382,6 +424,7 @@ void EventDispatch(API_Event_t* pEvent)
             log_print("API_EVENT_ID_NETWORK_REGISTER_DENIED");
             isNetworkRegistered = false;
             isNetworkRegisterDenied = true;
+            LED_BlinkSet(LED_BLINK_FREQ_4HZ, LED_BLINK_DUTY_HALF);            
             break;
         case API_EVENT_ID_NETWORK_DETACHED:
             Trace(1, "API_EVENT_ID_NETWORK_DETACHED");
@@ -394,6 +437,7 @@ void EventDispatch(API_Event_t* pEvent)
         case API_EVENT_ID_NETWORK_ATTACHED:
             Trace(1, "API_EVENT_ID_NETWORK_ATTACHED");
             log_print("API_EVENT_ID_NETWORK_ATTACHED");
+            LED_BlinkSet(LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);            
             break;
         case API_EVENT_ID_NETWORK_DEACTIVED:
             Trace(1, "API_EVENT_ID_NETWORK_DEACTIVED");
@@ -421,6 +465,11 @@ void EventDispatch(API_Event_t* pEvent)
                 OS_ReleaseSemaphore(networkCellInfoEventHandle);
             }
             break;
+        case API_EVENT_ID_GPS_UART_RECEIVED:
+            // Trace(1,"received GPS data,length:%d, data:%s,flag:%d",pEvent->param1,pEvent->pParam1,flag);
+            GPS_Update(pEvent->pParam1,pEvent->param1);
+            memcpy(&gpsInfoBuf.rmc, &gpsInfo->rmc, sizeof(gpsInfoBuf.rmc));
+            break; 
         default:
             break;
     }
@@ -429,11 +478,9 @@ void EventDispatch(API_Event_t* pEvent)
 void AppMainTask(VOID *pData)
 {
     API_Event_t* event=NULL;
-    
-    networkTaskHandle = OS_CreateTask(
-        NetworkTask, NULL, NULL, Network_TASK_STACK_SIZE, Network_TASK_PRIORITY, 0, 0, "network Task");
-    otherTaskHandle = OS_CreateTask(
-        LoopTask, NULL, NULL, Loop_TASK_STACK_SIZE, Loop_TASK_PRIORITY, 0, 0, "other Task");
+    OS_CreateTask(PowerManageTask, NULL, NULL, POWER_TASK_STACK_SIZE, POWER_TASK_PRIORITY, 0, 0, "power task");
+    OS_CreateTask(NetworkManageTask, NULL, NULL, Network_TASK_STACK_SIZE, Network_TASK_PRIORITY, 0, 0, "network Task");
+    OS_CreateTask(LoopTask, NULL, NULL, Loop_TASK_STACK_SIZE, Loop_TASK_PRIORITY, 0, 0, "other Task");
         
     while(1)
     {
