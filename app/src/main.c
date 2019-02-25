@@ -44,8 +44,11 @@
 #define Network_TASK_STACK_SIZE    (1024 * 1)
 #define Network_TASK_PRIORITY      6
 
-#define Loop_TASK_STACK_SIZE  (2048 * 2)
-#define Loop_TASK_PRIORITY    8
+#define Loop_TASK_STACK_SIZE       (2048 * 2)
+#define Loop_TASK_PRIORITY         8
+
+#define Display_TASK_STACK_SIZE   (1024 * 1)
+#define Display_TASK_PRIORITY      10
 
 #define LOG_FILE_PATH "/t/1.log"
 #define GPS_NMEA_LOG_FILE_PATH "/t/gps_nmea.log"
@@ -63,12 +66,40 @@ HANDLE networkCellInfoEventHandle = NULL;
 
 bool isNetworkRegistered = false;
 bool isNetworkRegisterDenied = false;
+bool isNetworkAttached = false;
+bool isNetworkActivated = false;
+bool isSocketConnected = false;
 
 int startAttachCount = 0;
 int startActiveCount = 0;
 
 uint8_t rbuf[RECEIVE_BUFFER_MAX_LENGTH];
 uint8_t wbuf[SEND_BUFFER_MAX_LENGTH];
+
+GPS_Info_t gpsInfoBuf;
+
+
+
+void GPS_Filter(struct minmea_sentence_rmc *rmc) {
+    static int latestTime = 0;
+    static float latestLat = 0.0;
+    static float latestLng = 0.0;
+
+    const float pi = 3.141592653;
+    const float r = 6371; // 6371km
+    const float speed = 240; // 240km/h
+    const float gpsInterval = 5; // 5s
+    float delta = (speed*(gpsInterval/3600))/(2*pi*r)*360;
+    int t = time(NULL);
+    float lat = minmea_tocoord(&rmc->latitude);
+    float lng = minmea_tocoord(&rmc->longitude);
+    if (lat-latestLat<delta && lat-latestLat>-1.0*delta && lng-latestLng<delta && lng-latestLng>-1.0*delta) {
+        memcpy(&gpsInfoBuf.rmc, rmc, sizeof(gpsInfoBuf.rmc));
+    }
+    latestTime = t;
+    latestLat = lat;
+    latestLng = lng;
+}
 
 void SendSIM() {
     memset(rbuf, 0, sizeof(rbuf));
@@ -144,23 +175,35 @@ void NetworkCallback(Network_Status_t status) {
     log_print(buf);
 }
 
-GPS_Info_t* gpsInfo;
-GPS_Info_t gpsInfoBuf;
+void DisplayTask(VOID *pData) {
+    while (1) {
+        if (isSocketConnected) {
+            LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_EMPTY);
+        } else if (isNetworkActivated) {
+            LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);
+        } else if (isNetworkAttached) {
+            LED_SetBlink(LED_LED1, LED_BLINK_FREQ_2HZ, LED_BLINK_DUTY_HALF);
+        } else if (isNetworkRegistered) {
+            LED_SetBlink(LED_LED1, LED_BLINK_FREQ_4HZ, LED_BLINK_DUTY_HALF);
+        } else {
+            LED_SetBlink(LED_LED1, LED_BLINK_FREQ_8HZ, LED_BLINK_DUTY_HALF);
+        }
+        OS_Sleep(1000);
+    }
+}
+
+
 HANDLE gps_lock = NULL;
+
 void LoopTask(VOID *pData) {
     //PM_SetSysMinFreq(PM_SYS_FREQ_13M);
     //PM_SetSysMinFreq(PM_SYS_FREQ_78M);
     
-    LED_Init();
-    LED_BlinkSet(LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
+
 
     log_init(LOG_FILE_PATH);
     GSM_Init();
     sock_init(SERVER_HOST, SERVER_PORT);
-
-    TIME_SetIsAutoUpdateRtcTime(true);
-
-    Network_SetStatusChangedCallback(NetworkCallback);
 
     while (1) {
         uint8_t status = 0;
@@ -170,13 +213,13 @@ void LoopTask(VOID *pData) {
         OS_Sleep(1000);
     }
 
-    gpsInfo = Gps_GetInfo();
     GPS_Init();
     GPS_SaveLog(true, GPS_NMEA_LOG_FILE_PATH);
     GPS_Open(NULL);
-    if(!GPS_SetOutputInterval(5000)) {
-        Trace(1,"set nmea output interval fail");
-    }
+    GPS_SetOutputInterval(5000); // It doesn't work one time. 
+    GPS_SetOutputInterval(5000);
+    GPS_SetOutputInterval(5000);
+    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
     //if(!GPS_AGPS(29.50191, 106.56246, 0, true)) {
     //    Trace(1,"agps fail");
     //}    
@@ -215,10 +258,12 @@ void LoopTask(VOID *pData) {
                 pmLatest = t;
             } else {
                 if (sock_connect()) {
-                    LED_BlinkSet(LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
+                    isSocketConnected = true;
                     SendSIM();
                     SendPM(t, p, v);
                     pmLatest = t;
+                } else {
+                    isSocketConnected = false;
                 }
             }
         }
@@ -231,10 +276,12 @@ void LoopTask(VOID *pData) {
                 gpsLatest = t;
             } else {
                 if (sock_connect()) {
-                    LED_BlinkSet(LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
+                    isSocketConnected = true;
                     SendSIM();
                     SendGPS(t, &gpsInfoBuf.rmc);
                     gpsLatest = t;
+                } else {
+                    isSocketConnected = false;
                 }
             }
         }
@@ -264,7 +311,7 @@ void LoopTask(VOID *pData) {
                         }
                     } else {
                         if (sock_connect()) {
-                            LED_BlinkSet(LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);                                                        
+                            isSocketConnected = true;
                             SendSIM();
                             if (t-fullGsmLastest>=600) {
                                 for (int i=0;i<l;i++) {
@@ -279,6 +326,8 @@ void LoopTask(VOID *pData) {
                                 }
                                 gsmLatest = t;
                             }
+                        } else {
+                            isSocketConnected = false;
                         }
                     }
                 } else {
@@ -300,6 +349,10 @@ void LoopTask(VOID *pData) {
 void NetworkManageTask(VOID *pData) {
     uint8_t attachStatus = 0;
     uint8_t activateStatus = 0;
+
+    TIME_SetIsAutoUpdateRtcTime(true);
+    Network_SetStatusChangedCallback(NetworkCallback);
+
     while(1) {
         if (isNetworkRegisterDenied) {
             OS_Sleep(10000);
@@ -318,16 +371,19 @@ void NetworkManageTask(VOID *pData) {
         }
 
         if (attachStatus==0) {
+            isNetworkAttached = false;
             if (startAttachCount > 10) {
                 log_print("startAttachCount>10, PM_Restart()");
                 PM_Restart();
             }
             Network_StartAttach();
+            startAttachCount++;
             log_print("Network_StartAttach()");
             OS_Sleep(5000);
             continue;
         } else if (attachStatus==1) {
             log_print("attachStatus==1");
+            isNetworkAttached = true;
             startAttachCount = 0;
         } else {
             log_print("unkown attach status");
@@ -342,6 +398,7 @@ void NetworkManageTask(VOID *pData) {
         }
 
         if (activateStatus==0) {
+            isNetworkActivated = false;
             if ( startActiveCount > 10) {
                 log_print("startActiveCount>10, PM_Restart()");
                 PM_Restart();
@@ -358,6 +415,7 @@ void NetworkManageTask(VOID *pData) {
             continue;
         } else if (activateStatus==1) {
             log_print("activateStatus==1");
+            isNetworkActivated = false;
             startActiveCount = 0;
             OS_Sleep(30000);
         } else {
@@ -382,7 +440,7 @@ void PowerManageTask(VOID *pData) {
 
 void EventDispatch(API_Event_t* pEvent)
 {
-    uint8_t status;
+    int keyDownAt = 0;
     char buf[64];
 
     switch(pEvent->id)
@@ -394,13 +452,18 @@ void EventDispatch(API_Event_t* pEvent)
         case API_EVENT_ID_KEY_DOWN:
             Trace(1,"key down, key:0x%02x",pEvent->param1);
             if(pEvent->param1 == KEY_POWER) {
+                keyDownAt = time(NULL);
             }
             break;
         case API_EVENT_ID_KEY_UP:
             Trace(1,"key release, key:0x%02x",pEvent->param1);
-            if(pEvent->param1 == KEY_POWER)
-            {
-                LED_Reversal(LED_LED1);
+            if(pEvent->param1 == KEY_POWER) {
+                if ( time(NULL) - keyDownAt > 5) {
+                    LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
+                    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
+                    OS_Sleep(3000);
+                    PM_ShutDown();
+                }
             }
             break;
         case API_EVENT_ID_NO_SIMCARD:
@@ -412,7 +475,6 @@ void EventDispatch(API_Event_t* pEvent)
             log_print("API_EVENT_ID_NETWORK_REGISTERED_xxxx");
             isNetworkRegistered = true;
             isNetworkRegisterDenied = false;
-            LED_BlinkSet(LED_BLINK_FREQ_2HZ, LED_BLINK_DUTY_HALF);
             break;
         case API_EVENT_ID_NETWORK_REGISTER_SEARCHING:
             Trace(1, "API_EVENT_ID_NETWORK_REGISTER_SEARCHING");
@@ -424,7 +486,6 @@ void EventDispatch(API_Event_t* pEvent)
             log_print("API_EVENT_ID_NETWORK_REGISTER_DENIED");
             isNetworkRegistered = false;
             isNetworkRegisterDenied = true;
-            LED_BlinkSet(LED_BLINK_FREQ_4HZ, LED_BLINK_DUTY_HALF);            
             break;
         case API_EVENT_ID_NETWORK_DETACHED:
             Trace(1, "API_EVENT_ID_NETWORK_DETACHED");
@@ -437,7 +498,6 @@ void EventDispatch(API_Event_t* pEvent)
         case API_EVENT_ID_NETWORK_ATTACHED:
             Trace(1, "API_EVENT_ID_NETWORK_ATTACHED");
             log_print("API_EVENT_ID_NETWORK_ATTACHED");
-            LED_BlinkSet(LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);            
             break;
         case API_EVENT_ID_NETWORK_DEACTIVED:
             Trace(1, "API_EVENT_ID_NETWORK_DEACTIVED");
@@ -467,8 +527,10 @@ void EventDispatch(API_Event_t* pEvent)
             break;
         case API_EVENT_ID_GPS_UART_RECEIVED:
             // Trace(1,"received GPS data,length:%d, data:%s,flag:%d",pEvent->param1,pEvent->pParam1,flag);
+            LED_TurnOn(LED_LED2);
             GPS_Update(pEvent->pParam1,pEvent->param1);
-            memcpy(&gpsInfoBuf.rmc, &gpsInfo->rmc, sizeof(gpsInfoBuf.rmc));
+            GPS_Filter(&Gps_GetInfo()->rmc);
+            LED_TurnOff(LED_LED2);
             break; 
         default:
             break;
@@ -477,10 +539,15 @@ void EventDispatch(API_Event_t* pEvent)
 
 void AppMainTask(VOID *pData)
 {
+    LED_Init();
+    LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
+    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
+
     API_Event_t* event=NULL;
     OS_CreateTask(PowerManageTask, NULL, NULL, POWER_TASK_STACK_SIZE, POWER_TASK_PRIORITY, 0, 0, "power task");
     OS_CreateTask(NetworkManageTask, NULL, NULL, Network_TASK_STACK_SIZE, Network_TASK_PRIORITY, 0, 0, "network Task");
     OS_CreateTask(LoopTask, NULL, NULL, Loop_TASK_STACK_SIZE, Loop_TASK_PRIORITY, 0, 0, "other Task");
+    OS_CreateTask(DisplayTask, NULL, NULL, Display_TASK_STACK_SIZE, Display_TASK_PRIORITY, 0, 0, "display Task");
         
     while(1)
     {
