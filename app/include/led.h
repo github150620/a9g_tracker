@@ -20,7 +20,7 @@ typedef enum{
 }LED_INDEX;
 
 void LED_Init();
-void LED_BlinkSet(float freq, float duty);
+void LED_SetBlink(LED_INDEX i, float freq, float duty);
 void LED_TurnOn(LED_INDEX i);
 void LED_TurnOff(LED_INDEX i);
 void LED_Reversal(LED_INDEX i);
