@@ -26,8 +26,9 @@
 #include "log.h"
 #include "led.h"
 #include "sock.h"
+#include "gps_filter.h"
 
-#define VERSION "0.3.24"
+#define VERSION "0.4.0"
 
 #define SERVER_HOST "tracker.fish2bird.com"
 #define SERVER_PORT 19999
@@ -77,29 +78,6 @@ uint8_t rbuf[RECEIVE_BUFFER_MAX_LENGTH];
 uint8_t wbuf[SEND_BUFFER_MAX_LENGTH];
 
 GPS_Info_t gpsInfoBuf;
-
-
-
-void GPS_Filter(struct minmea_sentence_rmc *rmc) {
-    static int latestTime = 0;
-    static float latestLat = 0.0;
-    static float latestLng = 0.0;
-
-    const float pi = 3.141592653;
-    const float r = 6371; // 6371km
-    const float speed = 240; // 240km/h
-    const float gpsInterval = 5; // 5s
-    float delta = (speed*(gpsInterval/3600))/(2*pi*r)*360;
-    int t = time(NULL);
-    float lat = minmea_tocoord(&rmc->latitude);
-    float lng = minmea_tocoord(&rmc->longitude);
-    if (lat-latestLat<delta && lat-latestLat>-1.0*delta && lng-latestLng<delta && lng-latestLng>-1.0*delta) {
-        memcpy(&gpsInfoBuf.rmc, rmc, sizeof(gpsInfoBuf.rmc));
-    }
-    latestTime = t;
-    latestLat = lat;
-    latestLng = lng;
-}
 
 void SendSIM() {
     memset(rbuf, 0, sizeof(rbuf));
@@ -198,8 +176,6 @@ HANDLE gps_lock = NULL;
 void LoopTask(VOID *pData) {
     //PM_SetSysMinFreq(PM_SYS_FREQ_13M);
     //PM_SetSysMinFreq(PM_SYS_FREQ_78M);
-    
-
 
     log_init(LOG_FILE_PATH);
     GSM_Init();
@@ -529,8 +505,17 @@ void EventDispatch(API_Event_t* pEvent)
             // Trace(1,"received GPS data,length:%d, data:%s,flag:%d",pEvent->param1,pEvent->pParam1,flag);
             LED_TurnOn(LED_LED2);
             GPS_Update(pEvent->pParam1,pEvent->param1);
-            GPS_Filter(&Gps_GetInfo()->rmc);
             LED_TurnOff(LED_LED2);
+       
+            float lat = minmea_tocoord(&(Gps_GetInfo()->rmc.latitude));
+            float lng = minmea_tocoord(&(Gps_GetInfo()->rmc.longitude));
+            if (!GPS_IsInChina(lat, lng)) {
+                break;
+            }
+            if (!GPS_IsPossible(time(NULL), lat, lng)) {
+                break;
+            }
+            memcpy(&gpsInfoBuf.rmc, &Gps_GetInfo()->rmc, sizeof(gpsInfoBuf.rmc));
             break; 
         default:
             break;
