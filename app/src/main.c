@@ -13,6 +13,7 @@
 #include "api_hal_pm.h"
 #include "api_info.h"
 #include "api_key.h"
+#include "api_lbs.h"
 #include "api_network.h"
 #include "api_os.h"
 #include "api_sim.h"
@@ -45,11 +46,14 @@
 #define Network_TASK_STACK_SIZE    (1024 * 1)
 #define Network_TASK_PRIORITY      6
 
+#define GPS_TASK_STACK_SIZE        (1024 * 2)
+#define GPS_TASK_PRIORITY          8
+
 #define Loop_TASK_STACK_SIZE       (2048 * 2)
-#define Loop_TASK_PRIORITY         8
+#define Loop_TASK_PRIORITY         10
 
 #define Display_TASK_STACK_SIZE   (1024 * 1)
-#define Display_TASK_PRIORITY      10
+#define Display_TASK_PRIORITY      12
 
 #define LOG_FILE_PATH "/t/1.log"
 #define GPS_NMEA_LOG_FILE_PATH "/t/gps_nmea.log"
@@ -64,88 +68,17 @@ HANDLE networkTaskHandle = NULL;
 HANDLE blinkTaskHandle = NULL;
 
 HANDLE networkCellInfoEventHandle = NULL;
+HANDLE gpsUartReceivedEventHandle = NULL;
 
 bool isNetworkRegistered = false;
 bool isNetworkRegisterDenied = false;
 bool isNetworkAttached = false;
 bool isNetworkActivated = false;
-bool isSocketConnected = false;
 
 int startAttachCount = 0;
 int startActiveCount = 0;
 
-uint8_t rbuf[RECEIVE_BUFFER_MAX_LENGTH];
-uint8_t wbuf[SEND_BUFFER_MAX_LENGTH];
-
 GPS_Info_t gpsInfoBuf;
-
-void SendSIM() {
-    memset(rbuf, 0, sizeof(rbuf));
-    memset(wbuf, 0, sizeof(wbuf));
-    snprintf(wbuf, sizeof(wbuf), "$SIM:%s,%s,%s,%s\n", imei, iccid, imsi,VERSION);
-    log_print(wbuf);
-    LED_TurnOn(LED_LED1);
-    sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
-    LED_TurnOff(LED_LED1);
-    log_print(rbuf);
-}
-
-void SendPM(time_t t, uint8_t percent, uint16_t voltage) {
-    memset(rbuf, 0, sizeof(rbuf));
-    memset(wbuf, 0, sizeof(wbuf));
-    snprintf(wbuf, sizeof(wbuf), "$PM:%d,%d,%d\n", t, voltage, percent);
-    log_print(wbuf);
-    LED_TurnOn(LED_LED1);    
-    sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
-    LED_TurnOff(LED_LED1);
-    log_print(rbuf);
-}
-
-void SendGSM(time_t t, Network_Location_t *nl) {
-    memset(rbuf, 0, sizeof(rbuf));
-    memset(wbuf, 0, sizeof(wbuf));
-    snprintf(wbuf, sizeof(wbuf), "$GSM:%d,%d%d%d,%d,%d,%d,%d,%d,%d,%d\n",
-                                    t,
-                                    nl->sMcc[0],
-                                    nl->sMcc[1],
-                                    nl->sMcc[2],
-                                    nl->sMnc[0]*100 + nl->sMnc[1]*10 + nl->sMnc[2],
-                                    nl->sLac,
-                                    nl->sCellID,
-                                    nl->iBsic,
-                                    nl->iRxLev,
-                                    nl->iRxLevSub,
-                                    nl->nArfcn);
-    log_print(wbuf);
-    LED_TurnOn(LED_LED1); 
-    sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
-    LED_TurnOff(LED_LED1);
-    log_print(rbuf);
-}
-
-void SendGPS(time_t t, struct minmea_sentence_rmc *rmc) {
-    memset(rbuf, 0, sizeof(rbuf));
-    memset(wbuf, 0, sizeof(wbuf));
-    float latitude = minmea_tocoord(&rmc->latitude);
-    float longitude = minmea_tocoord(&rmc->longitude);
-    float speed = minmea_tofloat(&rmc->speed);
-    float course = minmea_tofloat(&rmc->course);    
-    snprintf(wbuf, sizeof(wbuf), "$GPS:%d,%02d%02d%02d,%.7f,%.7f,%.1f,%.1f,%d\n",
-                                    t,
-                                    rmc->time.hours,
-                                    rmc->time.minutes,
-                                    rmc->time.seconds,
-                                    latitude,
-                                    longitude,
-                                    speed,
-                                    course,
-                                    rmc->valid);
-    log_print(wbuf);
-    LED_TurnOn(LED_LED1);    
-    sock_request(wbuf, strlen(wbuf), rbuf, RECEIVE_BUFFER_MAX_LENGTH);
-    LED_TurnOff(LED_LED1);    
-    log_print(rbuf);
-}
 
 void NetworkCallback(Network_Status_t status) {
     char buf[32];
@@ -155,7 +88,7 @@ void NetworkCallback(Network_Status_t status) {
 
 void DisplayTask(VOID *pData) {
     while (1) {
-        if (isSocketConnected) {
+        if (SOCK_Status()) {
             LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_EMPTY);
         } else if (isNetworkActivated) {
             LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);
@@ -170,17 +103,76 @@ void DisplayTask(VOID *pData) {
     }
 }
 
+void GpsTask(VOID *pData) {
+    char buf[128];
+    int lastTs = 0;
+    float lastLat = 0.0;
+    float lastLng = 0.0;
 
-HANDLE gps_lock = NULL;
+    GPS_Init();
+    GPS_SaveLog(true, GPS_NMEA_LOG_FILE_PATH);
+    GPS_Open(NULL);
+    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);
+    for(int i=0;i<5;i++) {
+        if (GPS_SetOutputInterval(5000)) {
+            break;
+        }
+        OS_Sleep(1000);
+    }
+    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
+
+    gpsUartReceivedEventHandle = OS_CreateSemaphore(0);
+    while(1) {
+        if (OS_WaitForSemaphore(gpsUartReceivedEventHandle, 10000)) {
+            int t = time(NULL);
+            float lat = minmea_tocoord(&(Gps_GetInfo()->rmc.latitude));
+            float lng = minmea_tocoord(&(Gps_GetInfo()->rmc.longitude));
+            if (GPS_IsInChina(lat, lng)) {
+                if (GPS_IsPossible(time(NULL), lat, lng)) {
+                    if ((t-lastTs>180)||(lat-lastLat>0.00009)||(lat-lastLat<-0.00009)||(lng-lastLng>0.00009)||(lng-lastLng<-0.00009)) { // r=6371km, 1°=111km, 0.00009°=100m
+                        Trace(1, "Send GPS");
+                        memcpy(&gpsInfoBuf.rmc, &Gps_GetInfo()->rmc, sizeof(gpsInfoBuf.rmc));
+                        float latitude = minmea_tocoord(&gpsInfoBuf.rmc.latitude);
+                        float longitude = minmea_tocoord(&gpsInfoBuf.rmc.longitude);
+                        float speed = minmea_tofloat(&gpsInfoBuf.rmc.speed);
+                        float course = minmea_tofloat(&gpsInfoBuf.rmc.course);    
+                        snprintf(buf, sizeof(buf), "$GPS:%d,%02d%02d%02d,%.7f,%.7f,%.1f,%.1f,%d\n",
+                                                        t,
+                                                        gpsInfoBuf.rmc.time.hours,
+                                                        gpsInfoBuf.rmc.time.minutes,
+                                                        gpsInfoBuf.rmc.time.seconds,
+                                                        latitude,
+                                                        longitude,
+                                                        speed,
+                                                        course,
+                                                        gpsInfoBuf.rmc.valid);
+                        Trace(5, "SOCK_WriteBuf: %s", buf);
+                        SOCK_WriteBuf(buf);
+                        lastTs = t;
+                        lastLat = lat;
+                        lastLng = lng;
+                    }
+                } else {
+                    Trace(1, "GPS is NOT stable.");
+                }
+            } else {
+                Trace(1, "GPS point is NOT in China.");
+            }
+        } else {
+            Trace(1, "GPS timeout.");
+        }
+        OS_Sleep(5000);
+    }
+}
 
 void LoopTask(VOID *pData) {
     //PM_SetSysMinFreq(PM_SYS_FREQ_13M);
     //PM_SetSysMinFreq(PM_SYS_FREQ_78M);
+    networkCellInfoEventHandle = OS_CreateSemaphore(0);
 
     log_init(LOG_FILE_PATH);
-    GSM_Init();
-    sock_init(SERVER_HOST, SERVER_PORT);
 
+    GSM_Init();
     while (1) {
         uint8_t status = 0;
         if (isNetworkRegistered && Network_GetActiveStatus(&status) && status==1) {
@@ -188,17 +180,6 @@ void LoopTask(VOID *pData) {
         }
         OS_Sleep(1000);
     }
-
-    GPS_Init();
-    GPS_SaveLog(true, GPS_NMEA_LOG_FILE_PATH);
-    GPS_Open(NULL);
-    GPS_SetOutputInterval(5000); // It doesn't work one time. 
-    GPS_SetOutputInterval(5000);
-    GPS_SetOutputInterval(5000);
-    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
-    //if(!GPS_AGPS(29.50191, 106.56246, 0, true)) {
-    //    Trace(1,"agps fail");
-    //}    
 
     memset(imei,0,sizeof(imei));
     INFO_GetIMEI(imei);
@@ -212,13 +193,16 @@ void LoopTask(VOID *pData) {
     SIM_GetIMSI(imsi);
     Trace(1, "IMSI: %s", imsi);
 
-    networkCellInfoEventHandle = OS_CreateSemaphore(0);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "$SIM:%s,%s,%s,%s\n", imei, iccid, imsi, VERSION);
+    SOCK_Init(SERVER_HOST, SERVER_PORT, buf);
+    OS_Sleep(1000); // Make sure the threads in SOCK started up.
+
+    OS_CreateTask(GpsTask, NULL, NULL, GPS_TASK_STACK_SIZE, GPS_TASK_PRIORITY, 0, 0, "GPS Task");
 
     int t;
     int pmLatest = 0;
     int gsmLatest = 0;
-    int gpsLatest = 0;
-    int fullGsmLastest = 0;
 
     while(1)
     {
@@ -229,37 +213,9 @@ void LoopTask(VOID *pData) {
             t = time(NULL) + 3600*8;
             uint8_t p;
             uint16_t v = PM_Voltage(&p);
-            if (sock_status() == 1) {
-                SendPM(t, p, v);
-                pmLatest = t;
-            } else {
-                if (sock_connect()) {
-                    isSocketConnected = true;
-                    SendSIM();
-                    SendPM(t, p, v);
-                    pmLatest = t;
-                } else {
-                    isSocketConnected = false;
-                }
-            }
-        }
-
-        t = time(NULL) + 3600*8;
-        if (t-gpsLatest >= 30) {
-            log_print("send gps data");
-            if (sock_status() == 1) {
-                SendGPS(t, &gpsInfoBuf.rmc);
-                gpsLatest = t;
-            } else {
-                if (sock_connect()) {
-                    isSocketConnected = true;
-                    SendSIM();
-                    SendGPS(t, &gpsInfoBuf.rmc);
-                    gpsLatest = t;
-                } else {
-                    isSocketConnected = false;
-                }
-            }
+            memset(buf, 0, sizeof(buf));
+            snprintf(buf, sizeof(buf), "$PM:%d,%d,%d\n", t, v, p);
+            SOCK_WriteBuf(buf);
         }
 
         t = time(NULL) + 3600*8;
@@ -272,39 +228,21 @@ void LoopTask(VOID *pData) {
                     Network_Location_t* p;
                     uint8_t l;
                     GSM_GetLocation(&p, &l);
-                    if (sock_status() == 1) {
-                        if (t-fullGsmLastest>=600) {
-                            for (int i=0;i<l;i++) {
-                                SendGSM(t, &p[i]);
-                            }
-                            gsmLatest = t;
-                            fullGsmLastest = t;
-                        } else {
-                            for (int i=0;i<l;i++) {
-                                SendGSM(t, &p[i]);
-                            }
-                            gsmLatest = t;
-                        }
-                    } else {
-                        if (sock_connect()) {
-                            isSocketConnected = true;
-                            SendSIM();
-                            if (t-fullGsmLastest>=600) {
-                                for (int i=0;i<l;i++) {
-                                    SendGSM(t, &p[i]);
-                                }
-                                gsmLatest = t;
-                                fullGsmLastest = t;
-                            } else {
-                                for (int i=0;i<l;i++) {
-                                    SendGSM(t, &p[i]);
-                                    break;
-                                }
-                                gsmLatest = t;
-                            }
-                        } else {
-                            isSocketConnected = false;
-                        }
+                    for (int i=0;i<l;i++) {
+                        memset(buf, 0, sizeof(buf));
+                        snprintf(buf, sizeof(buf), "$GSM:%d,%d%d%d,%d,%d,%d,%d,%d,%d,%d\n",
+                                                        t,
+                                                        p[i].sMcc[0],
+                                                        p[i].sMcc[1],
+                                                        p[i].sMcc[2],
+                                                        p[i].sMnc[0]*100 + p[i].sMnc[1]*10 + p[i].sMnc[2],
+                                                        p[i].sLac,
+                                                        p[i].sCellID,
+                                                        p[i].iBsic,
+                                                        p[i].iRxLev,
+                                                        p[i].iRxLevSub,
+                                                        p[i].nArfcn);
+                        SOCK_WriteBuf(buf);                     
                     }
                 } else {
                     log_print("OS_WaitForSemaphore()...timeout");
@@ -502,20 +440,13 @@ void EventDispatch(API_Event_t* pEvent)
             }
             break;
         case API_EVENT_ID_GPS_UART_RECEIVED:
-            // Trace(1,"received GPS data,length:%d, data:%s,flag:%d",pEvent->param1,pEvent->pParam1,flag);
+            Trace(1,"received GPS data,length:%d, data:%s",pEvent->param1,pEvent->pParam1);
             LED_TurnOn(LED_LED2);
             GPS_Update(pEvent->pParam1,pEvent->param1);
+            if (gpsUartReceivedEventHandle != NULL) {
+                OS_ReleaseSemaphore(gpsUartReceivedEventHandle);
+            }
             LED_TurnOff(LED_LED2);
-       
-            float lat = minmea_tocoord(&(Gps_GetInfo()->rmc.latitude));
-            float lng = minmea_tocoord(&(Gps_GetInfo()->rmc.longitude));
-            if (!GPS_IsInChina(lat, lng)) {
-                break;
-            }
-            if (!GPS_IsPossible(time(NULL), lat, lng)) {
-                break;
-            }
-            memcpy(&gpsInfoBuf.rmc, &Gps_GetInfo()->rmc, sizeof(gpsInfoBuf.rmc));
             break; 
         default:
             break;
