@@ -208,13 +208,13 @@ void LoopTask(VOID *pData) {
     {
         t = time(NULL) + 3600*8;
         if (t-pmLatest >= 60 ) {
-            log_print("send PM data");
-            Trace(1, "send PM data");
+            log_print("send PWR data");
+            Trace(1, "send PWR data");
             t = time(NULL) + 3600*8;
             uint8_t p;
             uint16_t v = PM_Voltage(&p);
             memset(buf, 0, sizeof(buf));
-            snprintf(buf, sizeof(buf), "$PM:%d,%d,%d\n", t, v, p);
+            snprintf(buf, sizeof(buf), "$PWR:%d,%d,%d\n", t, v, p);
             SOCK_WriteBuf(buf);
         }
 
