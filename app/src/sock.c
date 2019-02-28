@@ -7,10 +7,10 @@
 
 #include "log.h"
 
-#define SOCK_RECV_TASK_SIZE      (1024 * 4)
+#define SOCK_RECV_TASK_SIZE      (1024 * 2)
 #define SOCK_RECV_TASK_PRIORITY  16
 
-#define SOCK_SEND_TASK_SIZE      (1024 * 4)
+#define SOCK_SEND_TASK_SIZE      (1024 * 2)
 #define SOCK_SEND_TASK_PRIORITY  17
 
 #define SOCK_QUEUE_SIZE 32
