@@ -130,7 +130,7 @@ void GpsTask(VOID *pData) {
             float lng = minmea_tocoord(&(Gps_GetInfo()->rmc.longitude));
             if (GPS_IsInChina(lat, lng)) {
                 if (GPS_IsPossible(time(NULL), lat, lng)) {
-                    if ((t-lastTs>180)||(lat-lastLat>0.0009)||(lat-lastLat<-0.0009)||(lng-lastLng>0.0009)||(lng-lastLng<-0.0009)) { // r=6371km, 1°=111km, 0.00009°=100m
+                    if ((t-lastTs>180)||(lat-lastLat>0.0009)||(lat-lastLat<-0.0009)||(lng-lastLng>0.0009)||(lng-lastLng<-0.0009)) { // r=6371km, 1°=111km, 0.0009°=100m
                         Trace(1, "Send GPS");
                         memcpy(&gpsInfoBuf.rmc, &Gps_GetInfo()->rmc, sizeof(gpsInfoBuf.rmc));
                         float latitude = minmea_tocoord(&gpsInfoBuf.rmc.latitude);
