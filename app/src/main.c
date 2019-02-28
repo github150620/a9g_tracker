@@ -30,7 +30,7 @@
 #include "gps_filter.h"
 
 #define VERSION        "0.4.1"
-#define GPS_MODEL      1
+#define GPS_MODEL      0
 
 #define SERVER_HOST "tracker.fish2bird.com"
 #define SERVER_PORT 19999
@@ -148,7 +148,9 @@ void GpsTask(VOID *pData) {
                                                         course,
                                                         gpsInfoBuf.rmc.valid);
                         Trace(5, "SOCK_WriteBuf: %s", buf);
+                        LED_TurnOn(LED_LED2);
                         SOCK_WriteBuf(buf);
+                        LED_TurnOff(LED_LED2);
                         lastTs = t;
                         lastLat = lat;
                         lastLng = lng;
@@ -201,6 +203,8 @@ void LoopTask(VOID *pData) {
 
     if (GPS_MODEL) {
         OS_CreateTask(GpsTask, NULL, NULL, GPS_TASK_STACK_SIZE, GPS_TASK_PRIORITY, 0, 0, "GPS Task");
+    } else {
+        LED_SetBlink(LED_LED2, LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
     }
 
     int t;
@@ -218,7 +222,9 @@ void LoopTask(VOID *pData) {
             uint16_t v = PM_Voltage(&p);
             memset(buf, 0, sizeof(buf));
             snprintf(buf, sizeof(buf), "$PWR:%d,%d,%d\n", t, v, p);
+            LED_TurnOn(LED_LED2);
             SOCK_WriteBuf(buf);
+            LED_TurnOff(LED_LED2);
         }
 
         t = time(NULL) + 3600*8;
@@ -245,7 +251,9 @@ void LoopTask(VOID *pData) {
                                                         p[i].iRxLev,
                                                         p[i].iRxLevSub,
                                                         p[i].nArfcn);
-                        SOCK_WriteBuf(buf);                     
+                        LED_TurnOn(LED_LED2);
+                        SOCK_WriteBuf(buf);
+                        LED_TurnOff(LED_LED2);
                     }
                 } else {
                     log_print("OS_WaitForSemaphore()...timeout");
