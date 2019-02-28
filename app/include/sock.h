@@ -2,9 +2,8 @@
 #ifndef __SOCK_H__
 #define __SOCK_H__
 
-void sock_init(char* ip, int port);
-bool sock_connect();
-bool sock_request(char* data, int dataLen, char* responseBuf, int bufLen);
-int  sock_status();
+void SOCK_Init(char* domain, int port, char* firstSend);
+void SOCK_WriteBuf(char* data);
+int  SOCK_Status();
 
 #endif
