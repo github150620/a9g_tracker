@@ -29,7 +29,8 @@
 #include "sock.h"
 #include "gps_filter.h"
 
-#define VERSION "0.4.0"
+#define VERSION        "0.4.1"
+#define GPS_MODEL      1
 
 #define SERVER_HOST "tracker.fish2bird.com"
 #define SERVER_PORT 19999
@@ -198,7 +199,9 @@ void LoopTask(VOID *pData) {
     SOCK_Init(SERVER_HOST, SERVER_PORT, buf);
     OS_Sleep(1000); // Make sure the threads in SOCK started up.
 
-    OS_CreateTask(GpsTask, NULL, NULL, GPS_TASK_STACK_SIZE, GPS_TASK_PRIORITY, 0, 0, "GPS Task");
+    if (GPS_MODEL) {
+        OS_CreateTask(GpsTask, NULL, NULL, GPS_TASK_STACK_SIZE, GPS_TASK_PRIORITY, 0, 0, "GPS Task");
+    }
 
     int t;
     int pmLatest = 0;
@@ -252,11 +255,9 @@ void LoopTask(VOID *pData) {
             }
         }
 
-        //PM_SleepMode(true);
         PM_SetSysMinFreq(PM_SYS_FREQ_13M);
         OS_Sleep(30000);
         PM_SetSysMinFreq(PM_SYS_FREQ_312M);
-        //PM_SleepMode(false);
     }
 }
 
