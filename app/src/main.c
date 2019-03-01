@@ -357,7 +357,7 @@ void PowerManageTask(VOID *pData) {
         v = PM_Voltage(&p);
         if ( v < 3600 ) {
             count++;
-            if ( count > =3 ) {
+            if ( count >= 3 ) {
                 PM_ShutDown();
             }
         } else {
