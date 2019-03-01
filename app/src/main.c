@@ -350,14 +350,20 @@ void NetworkManageTask(VOID *pData) {
 }
 
 void PowerManageTask(VOID *pData) {
+    uint8_t count = 0;
     uint8_t p;
     uint16_t v;
     while (1) {
         v = PM_Voltage(&p);
         if ( v < 3600 ) {
-            PM_ShutDown();
+            count++;
+            if ( count > =3 ) {
+                PM_ShutDown();
+            }
+        } else {
+            count = 0;
         }
-        OS_Sleep(60000);
+        OS_Sleep(10000);
     }
 }
 
