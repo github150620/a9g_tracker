@@ -381,13 +381,15 @@ void EventDispatch(API_Event_t* pEvent)
         case API_EVENT_ID_KEY_DOWN:
             Trace(1,"key down, key:0x%02x",pEvent->param1);
             if(pEvent->param1 == KEY_POWER) {
+                LED_TurnOn(LED_LED1);
+                LED_TurnOn(LED_LED2);
                 keyDownAt = time(NULL);
             }
             break;
         case API_EVENT_ID_KEY_UP:
             Trace(1,"key release, key:0x%02x",pEvent->param1);
             if(pEvent->param1 == KEY_POWER) {
-                if ( keyDownAt != 0 && time(NULL) - keyDownAt > 5) {
+                if ( keyDownAt != 0 && time(NULL) - keyDownAt > 3) {
                     LED_SetBlink(LED_LED1, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
                     LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_FULL);
                     OS_Sleep(3000);
