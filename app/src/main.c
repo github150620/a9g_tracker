@@ -338,7 +338,7 @@ void NetworkManageTask(VOID *pData) {
             continue;
         } else if (activateStatus==1) {
             log_print("activateStatus==1");
-            isNetworkActivated = false;
+            isNetworkActivated = true;
             startActiveCount = 0;
             OS_Sleep(30000);
         } else {
