@@ -99,7 +99,7 @@ void SOCK_RecvTask(VOID *pData) {
         if (sock_fd==-1) {
             if (!SOCK_Connect()) {
                 Trace(1, "SOCK_Connect()...failed");
-                OS_Sleep(2000);
+                OS_Sleep(5000);
                 continue;
             }
         }
