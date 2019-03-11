@@ -29,8 +29,8 @@
 #include "sock.h"
 #include "gps_filter.h"
 
-#define VERSION        "0.4.1"
-#define GPS_MODEL      0
+#define VERSION        "0.4.2"
+#define GPS_MODEL      1
 
 #define SERVER_HOST "tracker.fish2bird.com"
 #define SERVER_PORT 19999
@@ -76,6 +76,9 @@ bool isNetworkRegisterDenied = false;
 bool isNetworkAttached = false;
 bool isNetworkActivated = false;
 
+bool isGpsOpened = false;
+bool isGpsValid = false;
+
 int startAttachCount = 0;
 int startActiveCount = 0;
 
@@ -100,6 +103,15 @@ void DisplayTask(VOID *pData) {
         } else {
             LED_SetBlink(LED_LED1, LED_BLINK_FREQ_8HZ, LED_BLINK_DUTY_HALF);
         }
+        if (GPS_MODEL) {
+            if (isGpsValid) {
+                LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_EMPTY);
+            } else if (isGpsOpened) {
+                LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);
+            } else {
+                LED_SetBlink(LED_LED2, LED_BLINK_FREQ_2HZ, LED_BLINK_DUTY_HALF);
+            }
+        }
         OS_Sleep(1000);
     }
 }
@@ -113,14 +125,13 @@ void GpsTask(VOID *pData) {
     GPS_Init();
     GPS_SaveLog(true, GPS_NMEA_LOG_FILE_PATH);
     GPS_Open(NULL);
-    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_1HZ, LED_BLINK_DUTY_HALF);
+    isGpsOpened = true;
     for(int i=0;i<5;i++) {
         if (GPS_SetOutputInterval(5000)) {
             break;
         }
         OS_Sleep(1000);
     }
-    LED_SetBlink(LED_LED2, LED_BLINK_FREQ_0, LED_BLINK_DUTY_HALF);
 
     gpsUartReceivedEventHandle = OS_CreateSemaphore(0);
     while(1) {
@@ -148,12 +159,13 @@ void GpsTask(VOID *pData) {
                                                         course,
                                                         gpsInfoBuf.rmc.valid);
                         Trace(5, "SOCK_WriteBuf: %s", buf);
-                        LED_TurnOn(LED_LED2);
+                        LED_TurnOn(LED_LED1);
                         SOCK_WriteBuf(buf);
-                        LED_TurnOff(LED_LED2);
+                        LED_TurnOff(LED_LED1);
                         lastTs = t;
                         lastLat = lat;
                         lastLng = lng;
+                        isGpsValid = gpsInfoBuf.rmc.valid;
                     }
                 } else {
                     Trace(1, "GPS is NOT stable.");
@@ -222,9 +234,9 @@ void LoopTask(VOID *pData) {
             uint16_t v = PM_Voltage(&p);
             memset(buf, 0, sizeof(buf));
             snprintf(buf, sizeof(buf), "$PWR:%d,%d,%d\n", t, v, p);
-            LED_TurnOn(LED_LED2);
+            LED_TurnOn(LED_LED1);
             SOCK_WriteBuf(buf);
-            LED_TurnOff(LED_LED2);
+            LED_TurnOff(LED_LED1);
         }
 
         t = time(NULL) + 3600*8;
@@ -251,9 +263,9 @@ void LoopTask(VOID *pData) {
                                                         p[i].iRxLev,
                                                         p[i].iRxLevSub,
                                                         p[i].nArfcn);
-                        LED_TurnOn(LED_LED2);
+                        LED_TurnOn(LED_LED1);
                         SOCK_WriteBuf(buf);
-                        LED_TurnOff(LED_LED2);
+                        LED_TurnOff(LED_LED1);
                     }
                 } else {
                     log_print("OS_WaitForSemaphore()...timeout");
@@ -458,12 +470,10 @@ void EventDispatch(API_Event_t* pEvent)
             break;
         case API_EVENT_ID_GPS_UART_RECEIVED:
             Trace(1,"received GPS data,length:%d, data:%s",pEvent->param1,pEvent->pParam1);
-            LED_TurnOn(LED_LED2);
             GPS_Update(pEvent->pParam1,pEvent->param1);
             if (gpsUartReceivedEventHandle != NULL) {
                 OS_ReleaseSemaphore(gpsUartReceivedEventHandle);
             }
-            LED_TurnOff(LED_LED2);
             break; 
         default:
             break;
