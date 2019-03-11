@@ -41,6 +41,7 @@ bool SOCK_Connect() {
         Trace(1, "DNS_GetHostByName2()...!0");
         close(sock_fd);
         sock_fd = -1;
+        sock_isConnected = 1;        
         return false;
     }
 
@@ -55,6 +56,7 @@ bool SOCK_Connect() {
         Trace(1, "connect()...-1");
         close(sock_fd);
         sock_fd = -1;
+        sock_isConnected = 1;
         return false;
     }
     sock_isConnected = 1;
@@ -63,6 +65,7 @@ bool SOCK_Connect() {
     if (len<=0) {
         close(sock_fd);
         sock_fd = -1;
+        sock_isConnected = 1;
         return false;
     }
     return true;
@@ -99,7 +102,7 @@ void SOCK_RecvTask(VOID *pData) {
         if (sock_fd==-1) {
             if (!SOCK_Connect()) {
                 Trace(1, "SOCK_Connect()...failed");
-                OS_Sleep(5000);
+                OS_Sleep(2000);
                 continue;
             }
         }
