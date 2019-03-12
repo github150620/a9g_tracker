@@ -41,7 +41,7 @@ bool SOCK_Connect() {
         Trace(1, "DNS_GetHostByName2()...!0");
         close(sock_fd);
         sock_fd = -1;
-        sock_isConnected = 1;        
+        sock_isConnected = 0;        
         return false;
     }
 
@@ -56,18 +56,19 @@ bool SOCK_Connect() {
         Trace(1, "connect()...-1");
         close(sock_fd);
         sock_fd = -1;
-        sock_isConnected = 1;
+        sock_isConnected = 0;
         return false;
     }
-    sock_isConnected = 1;
 
     int len = send(sock_fd, sock_firstSend, strlen(sock_firstSend), 0);    
     if (len<=0) {
         close(sock_fd);
         sock_fd = -1;
-        sock_isConnected = 1;
+        sock_isConnected = 0;
         return false;
     }
+    
+    sock_isConnected = 1;    
     return true;
 }
 
